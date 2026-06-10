@@ -6,9 +6,9 @@ from datetime import datetime
 
 usuarios_conectados = {}
 
-# ==========================================
-# FUNÇÕES DE BANCO DE DADOS (PERSISTÊNCIA)
-# ==========================================
+
+# FUNÇÕES DE BANCO DE DADOS
+
 def salvar_usuario(telefone, nome):
     conexao = sqlite3.connect('banco_de_dados.db')
     cursor = conexao.cursor()
@@ -60,9 +60,7 @@ def atualizar_status_mensagem(id_mensagem, novo_status):
     conexao.commit()
     conexao.close()
 
-# ==========================================
 # LÓGICA DE REDE E WEBSOCKETS
-# ==========================================
 async def manipulador_de_conexoes(websocket):
     telefone_atual = None
     try:

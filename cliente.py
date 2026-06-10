@@ -12,16 +12,11 @@ historico_conversas = {}
 estado_cli = 'MENU'
 contato_ativo = None
 
-# ==========================================
 # FUNÇÃO DE LIMPEZA DE TELA
-# ==========================================
 def limpar_tela():
     """Limpa o terminal no Windows (cls) ou Linux/Mac (clear)."""
     os.system('cls' if os.name == 'nt' else 'clear')
 
-# ==========================================
-# MARCAR COMO LIDA
-# ==========================================
 async def marcar_conversa_como_lida(websocket, numero_contato):
     global mensagens_nao_lidas
     mensagens_para_ler = [m for m in mensagens_nao_lidas if m['remetente'] == numero_contato]
@@ -33,9 +28,7 @@ async def marcar_conversa_como_lida(websocket, numero_contato):
         }))
     mensagens_nao_lidas = [m for m in mensagens_nao_lidas if m['remetente'] != numero_contato]
 
-# ==========================================
 # RECEBIMENTO E EXIBIÇÃO
-# ==========================================
 async def escutar_servidor(websocket):
     global mensagens_nao_lidas, contatos_conhecidos, historico_conversas
     try:
@@ -79,9 +72,7 @@ async def escutar_servidor(websocket):
     except websockets.exceptions.ConnectionClosed:
         print("\nConexão encerrada.")
 
-# ==========================================
 # INTERFACE DE USUÁRIO
-# ==========================================
 def carregar_tela_chat(telefone_alvo, meu_telefone):
     nome_alvo = contatos_conhecidos.get(telefone_alvo, telefone_alvo) 
     print(f"=== CONVERSA COM: {nome_alvo} ===")
@@ -171,14 +162,20 @@ async def main():
     meu_telefone = input("Seu Telefone: ")
     meu_nome = input("Nome ou Apelido? ")
     limpar_tela()
-    
-    async with websockets.connect("ws://localhost:8765") as ws:
-    
-        await ws.send(json.dumps({"tipo": "cadastro", "telefone": meu_telefone, "nome": meu_nome})) 
-        await asyncio.gather(
-            escutar_servidor(ws),
-            gerenciar_interface(ws, meu_telefone, meu_nome)
-        )
+    uri = "ws://localhost:8765"
+    try:
+        print("Tentando conectar ao servidor...")
+        async with websockets.connect(uri) as ws:
+            print("Conexão estabelecida com sucesso!")
+            await ws.send(json.dumps({"tipo": "cadastro", "telefone": meu_telefone, "nome": meu_nome})) 
+            await asyncio.gather(
+                escutar_servidor(ws),
+                gerenciar_interface(ws, meu_telefone, meu_nome)
+            )
+            
+    except ConnectionRefusedError:
+        print("O servidor não está conectado.") 
+       
 
 if __name__ == "__main__":
     asyncio.run(main())

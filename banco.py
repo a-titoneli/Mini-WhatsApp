@@ -5,7 +5,6 @@ def inicializar_banco():
     conexao = sqlite3.connect('banco_de_dados.db')
     cursor = conexao.cursor()
     
-    # Tabela de Usuários
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS usuarios (
             telefone TEXT PRIMARY KEY,
@@ -14,8 +13,6 @@ def inicializar_banco():
         )
     ''')
     
-    # Tabela de Mensagens
-    # status: 'enviada', 'entregue', ou 'lida'
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS mensagens (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
