@@ -1,71 +1,97 @@
-import asyncio
-import json
 import socket
+import threading
 import time
+import json
 
-PORTA_BROADCAST = 5000
-TIMEOUT_OFFLINE = 10 
+class PeerDiscovery:
+    def __init__(self, telefone, nome, porta_ws):
+        self.peer_id = telefone
+        self.nome = nome
+        self.porta_ws = porta_ws
+        
+        # Porta fixa para a descoberta UDP na rede local
+        self.discovery_port = 50000 
+        
+        # Dicionário para armazenar os peers descobertos
+        self.active_peers = {} 
+        
+        self.running = False
+        self.timeout_limit = 15  # Segundos para considerar um peer "morto"
 
-class DescobertaP2P(asyncio.DatagramProtocol):
-    def __init__(self, meu_telefone, meu_nome, minha_porta_ws, contatos_online):
-        self.meu_telefone = meu_telefone
-        self.meu_nome = meu_nome
-        self.minha_porta_ws = minha_porta_ws
-        # Este dicionário substituirá o 'usuarios_conectados' do seu antigo servidor
-        self.contatos_online = contatos_online 
-
-    def connection_made(self, transport):
-        self.transport = transport
-        sock = self.transport.get_extra_info('socket')
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-
-    def datagram_received(self, data, addr):
+    def _listen_for_broadcasts(self):
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        
         try:
-            pacote = json.loads(data.decode('utf-8'))
-            telefone = pacote.get("telefone")
-            
-            # Se não sou eu mesmo, adiciono/atualizo na lista de online
-            if telefone and telefone != self.meu_telefone:
-                self.contatos_online[telefone] = {
-                    "nome": pacote.get("nome"),
-                    "ip": addr[0],
-                    "porta_ws": pacote.get("porta_ws"),
-                    "last_seen": time.time()
-                }
-        except Exception:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+        except AttributeError:
             pass
 
-async def enviar_heartbeat_udp(transport, meu_telefone, meu_nome, minha_porta_ws):
-    """Grita para a rede local: 'Eu existo, este é meu IP e Porta!'"""
-    pacote = json.dumps({
-        "telefone": meu_telefone, 
-        "nome": meu_nome, 
-        "porta_ws": minha_porta_ws
-    }).encode('utf-8')
-    
-    while True:
-        transport.sendto(pacote, ('<broadcast>', PORTA_BROADCAST))
-        await asyncio.sleep(3)
+        sock.bind(('', self.discovery_port))
+        sock.settimeout(2.0) # Permite checar se o programa ainda está rodando
 
-async def limpar_usuarios_offline(contatos_online):
-    """Remove da memória quem parou de mandar sinal (caiu/fechou app)."""
-    while True:
-        agora = time.time()
-        para_remover = [tel for tel, dados in contatos_online.items() 
-                        if agora - dados["last_seen"] > TIMEOUT_OFFLINE]
-        
-        for tel in para_remover:
-            del contatos_online[tel]
-            # Aqui podemos colocar um aviso opcional: print(f"Usuário {tel} ficou offline")
+        while self.running:
+            try:
+                data, addr = sock.recvfrom(1024)
+                message = json.loads(data.decode('utf-8'))
+                
+                sender_id = message.get('peer_id')
+                sender_nome = message.get('nome')
+                sender_ws_port = message.get('porta_ws')
+
+                # Ignora a própria mensagem de broadcast
+                if sender_id != self.peer_id:
+                    self.active_peers[sender_id] = {
+                        'nome': sender_nome,
+                        'ip': addr[0],
+                        'porta_ws': sender_ws_port,
+                        'last_seen': time.time()
+                    }
+            except socket.timeout:
+                continue
+            except Exception as e:
+                if self.running:
+                    print(f"[Erro no Listener] {e}")
+
+        sock.close()
+
+    def _broadcast_presence(self):
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+
+        mensagem = json.dumps({
+            'peer_id': self.peer_id,
+            'nome': self.nome,
+            'porta_ws': self.porta_ws
+        }).encode('utf-8')
+
+        while self.running:
+            try:
+                sock.sendto(mensagem, ('192.168.18.255', self.discovery_port))
+            except Exception as e:
+                print(f"[Erro no Broadcast] {e}")
             
-        await asyncio.sleep(2)
+            time.sleep(5) 
+            
+        sock.close()
 
-async def iniciar_radar(meu_telefone, meu_nome, minha_porta_ws, contatos_online):
-    loop = asyncio.get_running_loop()
-    transport, protocol = await loop.create_datagram_endpoint(
-        lambda: DescobertaP2P(meu_telefone, meu_nome, minha_porta_ws, contatos_online),
-        local_addr=('0.0.0.0', PORTA_BROADCAST),
-        allow_broadcast=True
-    )
-    asyncio.create_task(enviar_heartbeat_udp(transport, meu_telefone, meu_nome, minha_porta_ws))
-    asyncio.create_task(limpar_usuarios_offline(contatos_online))
+    def _cleanup_dead_peers(self):
+        while self.running:
+            current_time = time.time()
+            for p_id in list(self.active_peers.keys()):
+                last_seen = self.active_peers[p_id]['last_seen']
+                if current_time - last_seen > self.timeout_limit:
+                    del self.active_peers[p_id]
+            time.sleep(3)
+
+    def start(self):
+        self.running = True
+        threading.Thread(target=self._listen_for_broadcasts, daemon=True).start()
+        threading.Thread(target=self._broadcast_presence, daemon=True).start()
+        threading.Thread(target=self._cleanup_dead_peers, daemon=True).start()
+
+    def stop(self):
+        self.running = False
+
+    def get_peers(self):
+        return self.active_peers.copy()
