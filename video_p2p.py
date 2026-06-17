@@ -15,38 +15,57 @@ class VideoCall:
         self.sock.bind(('0.0.0.0', self.minha_porta_video))
 
     def _receber_video(self):
-        print("[Vídeo] Aguardando conexão de vídeo...")
+        print("\n\033[F\033[K[Vídeo] Aguardando conexão... (Pressione 'q' na janela de vídeo para encerrar)")
+        tempo_sem_sinal = 0
+        
         while self.rodando:
             try:
-                self.sock.settimeout(2.0)
+                # Diminuímos o timeout para não prender o laço
+                self.sock.settimeout(0.5)
                 data, addr = self.sock.recvfrom(65536)
+                
+                # Se recebeu algo, zera o contador de queda
+                tempo_sem_sinal = 0 
                 
                 np_data = np.frombuffer(data, dtype=np.uint8)
                 frame = cv2.imdecode(np_data, cv2.IMREAD_COLOR)
                 
                 if frame is not None:
                     cv2.imshow("Chamada de Video (Recebendo)", frame)
-                    if cv2.waitKey(1) & 0xFF == ord('q'):
-                        self.parar()
-                        break
-                        
-            except socket.timeout:
-                continue
-            except ConnectionResetError:
-                # O Windows joga esse erro (10054) se o outro lado ainda não abriu a porta.
-                # Como é UDP, apenas ignoramos e tentamos ler o próximo frame.
-                continue
-            except Exception as e:
-                if self.rodando:
-                    print(f"[Erro no Recebimento de Vídeo] {e}")
                     
+            except socket.timeout:
+                tempo_sem_sinal += 0.5
+                # Se passar de 5 segundos de silêncio, desliga sozinho
+                if tempo_sem_sinal >= 5.0:
+                    print("\n[Vídeo] A chamada foi encerrada (Conexão perdida).")
+                    self.parar()
+                    break
+            except ConnectionResetError:
+                # Ignora falso-positivo do Windows
+                pass
+            except OSError:
+                # Se o socket foi fechado de propósito
+                break
+            except Exception:
+                pass
+
+            # ====================================================
+            # A MÁGICA: O waitKey agora fica fora e roda sempre!
+            # Mantém a janela fluida e escuta o "q" a qualquer momento
+            # ====================================================
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                print("\n[Vídeo] Você encerrou a chamada.")
+                self.parar()
+                break
+                
         cv2.destroyAllWindows()
 
     def _enviar_video(self):
         cap = cv2.VideoCapture(0) 
         
         if not cap.isOpened():
-            print("[Erro] Não foi possível acessar a webcam.")
+            print("\n[Erro] Não foi possível acessar a webcam.")
+            self.parar()
             return
 
         while self.rodando:
@@ -61,10 +80,10 @@ class VideoCall:
             try:
                 self.sock.sendto(buffer.tobytes(), (self.ip_destino, self.porta_destino))
             except ConnectionResetError:
-                # Ignora o mesmo erro no envio
-                continue
-            except Exception as e:
-                print(f"[Erro no Envio de Vídeo] {e}")
+                pass
+            except OSError:
+                break
+            except Exception:
                 break
                 
         cap.release()
@@ -73,7 +92,6 @@ class VideoCall:
         self.rodando = True
         threading.Thread(target=self._receber_video, daemon=True).start()
         threading.Thread(target=self._enviar_video, daemon=True).start()
-        print("\n\033[F\033[K[🎥] Chamada de vídeo iniciada! (Pressione 'q' na janela para encerrar)")
 
     def parar(self):
         self.rodando = False
