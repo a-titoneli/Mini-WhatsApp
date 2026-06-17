@@ -7,7 +7,7 @@ import base64
 from datetime import datetime
 import banco
 from descoberta import PeerDiscovery
-from video_p2p import VideoCall  # Importando nosso motor de vídeo
+from video_p2p import VideoCall
 
 # ==========================================
 # IMPORTAÇÃO SEGURA DO TKINTER
@@ -91,7 +91,7 @@ async def servidor_local(websocket):
             if tipo == 'chamada_video':
                 ip_chamador = radar_p2p.get_peers().get(remetente, {}).get('ip', '0.0.0.0')
                 porta_video_chamador = dados.get('porta_video')
-                
+
                 chamada_pendente = {
                     'remetente': remetente,
                     'ip': ip_chamador,
@@ -99,13 +99,19 @@ async def servidor_local(websocket):
                 }
                 print(f"\n\033[F\033[K📞 [RING] {nome_remetente} está te ligando por vídeo! Digite /atender para aceitar.")
                 
+                # Libera o terminal de quem enviou o convite
+                await websocket.send(json.dumps({"tipo": "sinal_recebido"}))
+
             elif tipo == 'aceitar_video':
                 ip_destino = radar_p2p.get_peers().get(remetente, {}).get('ip', '0.0.0.0')
                 porta_video_destino = dados.get('porta_video')
-                
+
                 print(f"\n\033[F\033[K🎥 {nome_remetente} atendeu! Abrindo câmera...")
                 sessao_video = VideoCall('0.0.0.0', porta_video_local, ip_destino, porta_video_destino)
                 sessao_video.iniciar()
+                
+                # Libera o terminal de quem atendeu
+                await websocket.send(json.dumps({"tipo": "sinal_recebido"}))
 
             # --- MENSAGENS E ARQUIVOS ---
             elif tipo in ['nova_mensagem', 'arquivo']:
@@ -166,7 +172,7 @@ async def disparar_pacote_ws(destinatario, pacote):
         try:
             async with websockets.connect(uri, max_size=None) as ws:
                 await ws.send(json.dumps(pacote))
-                return await ws.recv() # Retorna a resposta
+                return await ws.recv()
         except Exception:
             return None
     return None
@@ -285,7 +291,7 @@ async def gerenciar_interface():
                     
                     sessao_video = VideoCall('0.0.0.0', porta_video_local, ip_chamador, porta_chamador)
                     sessao_video.iniciar()
-                    chamada_pendente = {} # Limpa o status
+                    chamada_pendente = {}
                 else:
                     print("\033[F\033[K[!] Não há nenhuma chamada de vídeo tocando.")
 
@@ -321,7 +327,6 @@ async def main():
         except ValueError:
             pass
             
-    # Gera a porta de vídeo automaticamente baseada na porta do WebSocket
     porta_video_local = minha_porta_ws + 10000
             
     limpar_tela()
