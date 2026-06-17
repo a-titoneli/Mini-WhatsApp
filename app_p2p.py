@@ -4,6 +4,8 @@ import json
 import aioconsole
 import os
 import base64
+import tkinter as tk
+from tkinter import filedialog
 from datetime import datetime
 import banco
 from descoberta import PeerDiscovery
@@ -32,7 +34,7 @@ def carregar_tela_chat(telefone_alvo):
     peers_online = radar_p2p.get_peers() if radar_p2p else {}
     nome_alvo = peers_online.get(telefone_alvo, {}).get('nome', telefone_alvo)
     print(f"=== CONVERSA COM: {nome_alvo} ===")
-    print("Comandos: /voltar | /arquivo <caminho_do_arquivo>")
+    print("Comandos: /voltar | /arquivo")
     print("="*50)
     
     if telefone_alvo in historico_conversas:
@@ -40,6 +42,22 @@ def carregar_tela_chat(telefone_alvo):
             prefixo = "Você" if msg['de'] == meu_telefone else msg.get('nome', msg['de'])
             print(f"[{msg['hora']}] {prefixo}: {msg['texto']}")
     print(" ")
+
+# ==========================================
+# SELETOR DE ARQUIVOS (GUI)
+# ==========================================
+def _abrir_janela_selecao():
+    """Abre a janela nativa do SO de forma invisível no fundo."""
+    root = tk.Tk()
+    root.withdraw() 
+    root.attributes('-topmost', True) 
+    caminho = filedialog.askopenfilename(title="Selecione o arquivo para enviar")
+    root.destroy()
+    return caminho
+
+async def selecionar_arquivo_async():
+    """Roda a janela em uma Thread separada."""
+    return await asyncio.to_thread(_abrir_janela_selecao)
 
 # ==========================================
 # LADO SERVIDOR (RECEBIMENTO E ESCUTANDO)
@@ -59,23 +77,19 @@ async def servidor_local(websocket):
                 if tipo == 'nova_mensagem':
                     conteudo_texto = dados['texto']
                 else:
-                    # Lógica de recebimento de Arquivo
                     nome_arquivo = dados['nome_arquivo']
                     conteudo_b64 = dados['conteudo_b64']
                     
-                    # Decodifica o Base64 e salva o arquivo fisicamente
                     caminho_salvo = os.path.join(PASTA_DOWNLOADS, f"{remetente}_{nome_arquivo}")
                     with open(caminho_salvo, "wb") as f:
                         f.write(base64.b64decode(conteudo_b64))
                     
                     conteudo_texto = f"📁 [Arquivo Recebido] {nome_arquivo} -> Salvo em {PASTA_DOWNLOADS}"
 
-                # Salva no histórico da tela
                 if remetente not in historico_conversas:
                     historico_conversas[remetente] = []
                 historico_conversas[remetente].append({"de": remetente, "nome": nome_remetente, "texto": conteudo_texto, "hora": hora}) 
                 
-                # Manda confirmação de entrega
                 await websocket.send(json.dumps({
                     "tipo": "confirmacao_entrega",
                     "id_mensagem": id_msg,
@@ -108,7 +122,6 @@ async def servidor_local(websocket):
         pass
 
 async def iniciar_servidor_ws():
-    # max_size=None permite receber arquivos de qualquer tamanho sem desconectar
     async with websockets.serve(servidor_local, "0.0.0.0", minha_porta_ws, max_size=None):
         await asyncio.Future()
 
@@ -151,13 +164,12 @@ async def enviar_mensagem_p2p(destinatario, texto):
 
 async def enviar_arquivo_p2p(destinatario, caminho_arquivo):
     if not os.path.exists(caminho_arquivo):
-        return "[Erro] Arquivo não encontrado no disco."
+        return "[Erro] Arquivo não encontrado."
 
     nome_arquivo = os.path.basename(caminho_arquivo)
     agora = datetime.now().strftime("%d/%m/%Y %H:%M")
     texto_historico = f"📁 [Arquivo Enviado] {nome_arquivo}"
 
-    # Lê os bytes e codifica para string Base64
     with open(caminho_arquivo, "rb") as f:
         conteudo_bytes = f.read()
         conteudo_b64 = base64.b64encode(conteudo_bytes).decode('utf-8')
@@ -185,14 +197,13 @@ async def enviar_arquivo_p2p(destinatario, caminho_arquivo):
             "timestamp": agora
         }
         try:
-            # max_size=None para permitir o envio do payload gigante do Base64
             async with websockets.connect(uri, max_size=None) as ws:
                 await ws.send(json.dumps(pacote))
                 resposta = await ws.recv()
                 if json.loads(resposta).get('tipo') == 'confirmacao_entrega':
                     banco.atualizar_status_mensagem(id_msg, 'entregue')
                     return "✔"
-        except Exception as e:
+        except Exception:
             return " "
     return " "
 
@@ -247,13 +258,16 @@ async def gerenciar_interface():
                 estado_cli = 'MENU'
                 contato_ativo = None
                 limpar_tela() 
-            elif msg.startswith('/arquivo '):
-                # Extrai o caminho digitado após o comando
-                caminho = msg.split(' ', 1)[1].strip()
-                # Mostra ao usuário que o envio começou e aguarda
-                print(f"\033[F\033[KEnviando arquivo '{os.path.basename(caminho)}'...") 
-                status_icon = await enviar_arquivo_p2p(contato_ativo, caminho)
-                print(f"\033[F\033[KVocê enviou um arquivo: {caminho} {status_icon}")
+            elif msg == '/arquivo':
+                print("\033[F\033[KAbrindo seletor de arquivos...")
+                caminho = await selecionar_arquivo_async()
+                
+                if caminho: 
+                    print(f"\033[F\033[KEnviando arquivo '{os.path.basename(caminho)}'...") 
+                    status_icon = await enviar_arquivo_p2p(contato_ativo, caminho)
+                    print(f"\033[F\033[KVocê enviou um arquivo: {os.path.basename(caminho)} {status_icon}")
+                else:
+                    print("\033[F\033[K[!] Envio cancelado.")
             elif msg.strip():
                 status_icon = await enviar_mensagem_p2p(contato_ativo, msg)
                 print(f"\033[F\033[KVocê: {msg} {status_icon}") 
