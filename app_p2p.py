@@ -4,6 +4,7 @@ import json
 import aioconsole
 import os
 import base64
+import cv2  # <--- Importação necessária agora aqui
 from datetime import datetime
 import banco
 from descoberta import PeerDiscovery
@@ -33,10 +34,8 @@ meu_nome = ""
 minha_porta_ws = 0
 porta_video_local = 0
 
-# Controles da Chamada de Vídeo e Threads
 chamada_pendente = {} 
 sessao_video = None
-main_loop = None  
 
 PASTA_DOWNLOADS = "downloads_p2p"
 os.makedirs(PASTA_DOWNLOADS, exist_ok=True)
@@ -58,16 +57,38 @@ def carregar_tela_chat(telefone_alvo):
     print(" ")
 
 # ==========================================
-# PONTE ENTRE THREAD OPENCV E ASYNCIO
+# MOTOR GRÁFICO DE VÍDEO (THREAD PRINCIPAL)
 # ==========================================
-def notificar_encerramento():
-    """Chamada pela thread do OpenCV para injetar o sinal de fecho no loop assíncrono."""
-    global contato_ativo, main_loop
-    if contato_ativo and main_loop:
-        asyncio.run_coroutine_threadsafe(
-            enviar_sinal_video(contato_ativo, 'encerrar_video'), 
-            main_loop
-        )
+async def motor_interface_video():
+    """Responsável por desenhar as imagens na tela de forma segura no Linux."""
+    global sessao_video, contato_ativo
+    janela_aberta = False
+    
+    while True:
+        if sessao_video and sessao_video.rodando:
+            if sessao_video.frame_atual is not None:
+                cv2.imshow("Chamada de Video", sessao_video.frame_atual)
+                janela_aberta = True
+                
+            # O waitKey DENTRO da Thread Principal!
+            if janela_aberta:
+                if cv2.waitKey(1) & 0xFF == ord('q'):
+                    print("\n\033[F\033[K[Vídeo] Você encerrou a chamada.")
+                    sessao_video.parar()
+                    if contato_ativo:
+                        await enviar_sinal_video(contato_ativo, 'encerrar_video')
+                    cv2.destroyAllWindows()
+                    janela_aberta = False
+                    sessao_video = None
+        else:
+            # Se a chamada caiu (ou pelo "q" do outro lado ou timeout)
+            if janela_aberta:
+                cv2.destroyAllWindows()
+                janela_aberta = False
+                sessao_video = None
+                
+        # Pausa para não fritar a CPU e simular ~30 FPS
+        await asyncio.sleep(0.03) 
 
 # ==========================================
 # SELETOR DE ARQUIVOS
@@ -100,7 +121,6 @@ async def servidor_local(websocket):
             remetente = dados.get('remetente')
             nome_remetente = dados.get('nome_remetente', remetente)
             
-            # --- SINALIZAÇÃO DE VÍDEO ---
             if tipo == 'chamada_video':
                 ip_chamador = radar_p2p.get_peers().get(remetente, {}).get('ip', '0.0.0.0')
                 porta_video_chamador = dados.get('porta_video')
@@ -118,7 +138,7 @@ async def servidor_local(websocket):
                 porta_video_destino = dados.get('porta_video')
 
                 print(f"\n\033[F\033[K🎥 {nome_remetente} atendeu! Abrindo câmera...")
-                sessao_video = VideoCall('0.0.0.0', porta_video_local, ip_destino, porta_video_destino, on_close=notificar_encerramento)
+                sessao_video = VideoCall('0.0.0.0', porta_video_local, ip_destino, porta_video_destino)
                 sessao_video.iniciar()
                 await websocket.send(json.dumps({"tipo": "sinal_recebido"}))
 
@@ -126,9 +146,8 @@ async def servidor_local(websocket):
                 print(f"\n\033[F\033[K📞 {nome_remetente} encerrou a chamada de vídeo.")
                 if sessao_video:
                     sessao_video.parar()
-                    sessao_video = None
-
-            # --- MENSAGENS E ARQUIVOS ---
+                    # A função motor_interface_video vai perceber e destruir as janelas
+                    
             elif tipo in ['nova_mensagem', 'arquivo']:
                 id_msg = dados.get('id_mensagem')
                 hora = dados.get('timestamp', datetime.now().strftime("%d/%m/%Y %H:%M"))
@@ -302,7 +321,7 @@ async def gerenciar_interface():
                     print("\033[F\033[K🎥 Atendendo chamada! Ligando câmera...")
                     await enviar_sinal_video(remetente, 'aceitar_video')
                     
-                    sessao_video = VideoCall('0.0.0.0', porta_video_local, ip_chamador, porta_chamador, on_close=notificar_encerramento)
+                    sessao_video = VideoCall('0.0.0.0', porta_video_local, ip_chamador, porta_chamador)
                     sessao_video.iniciar()
                     chamada_pendente = {}
                 else:
@@ -326,9 +345,8 @@ async def gerenciar_interface():
 # BOOTSTRAP
 # ==========================================
 async def main():
-    global meu_telefone, meu_nome, minha_porta_ws, porta_video_local, radar_p2p, main_loop
+    global meu_telefone, meu_nome, minha_porta_ws, porta_video_local, radar_p2p
     banco.inicializar_banco()
-    main_loop = asyncio.get_running_loop() # Captura o loop assíncrono para uso das threads
     
     print(f"===== INICIALIZAÇÃO P2P =====")
     meu_telefone = input("Seu Telefone (ID): ")
@@ -349,9 +367,11 @@ async def main():
     radar_p2p = PeerDiscovery(meu_telefone, meu_nome, minha_porta_ws)
     radar_p2p.start()
     
+    # Executa o loop da interface gráfica em paralelo com o resto da aplicação
     await asyncio.gather(
         iniciar_servidor_ws(),
-        gerenciar_interface()
+        gerenciar_interface(),
+        motor_interface_video()
     )
 
 if __name__ == "__main__":
