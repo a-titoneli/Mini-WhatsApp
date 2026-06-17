@@ -11,13 +11,12 @@ class VideoCall:
         self.porta_destino = porta_destino
         
         self.rodando = False
-        self.frame_atual = None  # <--- Armazena a imagem para a thread principal buscar
+        self.frame_atual = None  # Armazena a imagem decodificada para o app_p2p buscar
         
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.bind(('0.0.0.0', self.minha_porta_video))
 
     def _receber_video(self):
-        print("\n\033[F\033[K[Vídeo] Aguardando conexão... (Pressione 'q' na janela de vídeo para encerrar)")
         tempo_sem_sinal = 0
         
         while self.rodando:
@@ -30,7 +29,7 @@ class VideoCall:
                 frame = cv2.imdecode(np_data, cv2.IMREAD_COLOR)
                 
                 if frame is not None:
-                    self.frame_atual = frame  # Atualiza a variável silenciosamente
+                    self.frame_atual = frame
                     
             except socket.timeout:
                 tempo_sem_sinal += 0.5

@@ -4,7 +4,7 @@ import json
 import aioconsole
 import os
 import base64
-import cv2  # <--- Importação necessária agora aqui
+import cv2
 from datetime import datetime
 import banco
 from descoberta import PeerDiscovery
@@ -65,29 +65,34 @@ async def motor_interface_video():
     janela_aberta = False
     
     while True:
-        if sessao_video and sessao_video.rodando:
-            if sessao_video.frame_atual is not None:
-                cv2.imshow("Chamada de Video", sessao_video.frame_atual)
-                janela_aberta = True
-                
-            # O waitKey DENTRO da Thread Principal!
-            if janela_aberta:
-                if cv2.waitKey(1) & 0xFF == ord('q'):
-                    print("\n\033[F\033[K[Vídeo] Você encerrou a chamada.")
-                    sessao_video.parar()
-                    if contato_ativo:
-                        await enviar_sinal_video(contato_ativo, 'encerrar_video')
+        try:
+            if sessao_video and sessao_video.rodando:
+                if sessao_video.frame_atual is not None:
+                    cv2.imshow("Chamada de Video", sessao_video.frame_atual)
+                    janela_aberta = True
+                    
+                if janela_aberta:
+                    if cv2.waitKey(1) & 0xFF == ord('q'):
+                        print("\n\033[F\033[K[Vídeo] Você encerrou a chamada.")
+                        sessao_video.parar()
+                        
+                        if contato_ativo:
+                            asyncio.create_task(enviar_sinal_video(contato_ativo, 'encerrar_video'))
+                        
+                        cv2.destroyAllWindows()
+                        cv2.waitKey(1)  # Flush obrigatório no Linux
+                        janela_aberta = False
+                        sessao_video = None
+            else:
+                if janela_aberta:
                     cv2.destroyAllWindows()
+                    cv2.waitKey(1)  # Flush obrigatório no Linux
                     janela_aberta = False
                     sessao_video = None
-        else:
-            # Se a chamada caiu (ou pelo "q" do outro lado ou timeout)
-            if janela_aberta:
-                cv2.destroyAllWindows()
-                janela_aberta = False
-                sessao_video = None
+                    
+        except Exception:
+            pass
                 
-        # Pausa para não fritar a CPU e simular ~30 FPS
         await asyncio.sleep(0.03) 
 
 # ==========================================
@@ -146,7 +151,6 @@ async def servidor_local(websocket):
                 print(f"\n\033[F\033[K📞 {nome_remetente} encerrou a chamada de vídeo.")
                 if sessao_video:
                     sessao_video.parar()
-                    # A função motor_interface_video vai perceber e destruir as janelas
                     
             elif tipo in ['nova_mensagem', 'arquivo']:
                 id_msg = dados.get('id_mensagem')
@@ -367,7 +371,6 @@ async def main():
     radar_p2p = PeerDiscovery(meu_telefone, meu_nome, minha_porta_ws)
     radar_p2p.start()
     
-    # Executa o loop da interface gráfica em paralelo com o resto da aplicação
     await asyncio.gather(
         iniciar_servidor_ws(),
         gerenciar_interface(),
