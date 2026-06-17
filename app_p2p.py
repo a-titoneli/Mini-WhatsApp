@@ -33,9 +33,10 @@ meu_nome = ""
 minha_porta_ws = 0
 porta_video_local = 0
 
-# Controles da Chamada de Vídeo
+# Controles da Chamada de Vídeo e Threads
 chamada_pendente = {} 
 sessao_video = None
+main_loop = None  
 
 PASTA_DOWNLOADS = "downloads_p2p"
 os.makedirs(PASTA_DOWNLOADS, exist_ok=True)
@@ -55,6 +56,18 @@ def carregar_tela_chat(telefone_alvo):
             prefixo = "Você" if msg['de'] == meu_telefone else msg.get('nome', msg['de'])
             print(f"[{msg['hora']}] {prefixo}: {msg['texto']}")
     print(" ")
+
+# ==========================================
+# PONTE ENTRE THREAD OPENCV E ASYNCIO
+# ==========================================
+def notificar_encerramento():
+    """Chamada pela thread do OpenCV para injetar o sinal de fecho no loop assíncrono."""
+    global contato_ativo, main_loop
+    if contato_ativo and main_loop:
+        asyncio.run_coroutine_threadsafe(
+            enviar_sinal_video(contato_ativo, 'encerrar_video'), 
+            main_loop
+        )
 
 # ==========================================
 # SELETOR DE ARQUIVOS
@@ -98,8 +111,6 @@ async def servidor_local(websocket):
                     'porta_video': porta_video_chamador
                 }
                 print(f"\n\033[F\033[K📞 [RING] {nome_remetente} está te ligando por vídeo! Digite /atender para aceitar.")
-                
-                # Libera o terminal de quem enviou o convite
                 await websocket.send(json.dumps({"tipo": "sinal_recebido"}))
 
             elif tipo == 'aceitar_video':
@@ -107,11 +118,15 @@ async def servidor_local(websocket):
                 porta_video_destino = dados.get('porta_video')
 
                 print(f"\n\033[F\033[K🎥 {nome_remetente} atendeu! Abrindo câmera...")
-                sessao_video = VideoCall('0.0.0.0', porta_video_local, ip_destino, porta_video_destino)
+                sessao_video = VideoCall('0.0.0.0', porta_video_local, ip_destino, porta_video_destino, on_close=notificar_encerramento)
                 sessao_video.iniciar()
-                
-                # Libera o terminal de quem atendeu
                 await websocket.send(json.dumps({"tipo": "sinal_recebido"}))
+
+            elif tipo == 'encerrar_video':
+                print(f"\n\033[F\033[K📞 {nome_remetente} encerrou a chamada de vídeo.")
+                if sessao_video:
+                    sessao_video.parar()
+                    sessao_video = None
 
             # --- MENSAGENS E ARQUIVOS ---
             elif tipo in ['nova_mensagem', 'arquivo']:
@@ -147,7 +162,6 @@ async def servidor_local(websocket):
                     print(f"\n❗ Nova mensagem de {nome_remetente}") 
                     mensagens_nao_lidas.append({"id_mensagem": id_msg, "remetente": remetente})
 
-            # --- STATUS DE LEITURA ---
             elif tipo in ['confirmacao_entrega', 'confirmacao_leitura']:
                 status_db = 'entregue' if tipo == 'confirmacao_entrega' else 'lida'
                 banco.atualizar_status_mensagem(dados['id_mensagem'], status_db)
@@ -165,7 +179,6 @@ async def iniciar_servidor_ws():
 # LADO CLIENTE (ENVIANDO)
 # ==========================================
 async def disparar_pacote_ws(destinatario, pacote):
-    """Função genérica para enviar pacotes via WebSocket."""
     peers_online = radar_p2p.get_peers() if radar_p2p else {}
     if destinatario in peers_online:
         uri = f"ws://{peers_online[destinatario]['ip']}:{peers_online[destinatario]['porta_ws']}"
@@ -289,11 +302,11 @@ async def gerenciar_interface():
                     print("\033[F\033[K🎥 Atendendo chamada! Ligando câmera...")
                     await enviar_sinal_video(remetente, 'aceitar_video')
                     
-                    sessao_video = VideoCall('0.0.0.0', porta_video_local, ip_chamador, porta_chamador)
+                    sessao_video = VideoCall('0.0.0.0', porta_video_local, ip_chamador, porta_chamador, on_close=notificar_encerramento)
                     sessao_video.iniciar()
                     chamada_pendente = {}
                 else:
-                    print("\033[F\033[K[!] Não há nenhuma chamada de vídeo tocando.")
+                    print("\033[F\033[K[!] No momento não há chamadas tocando.")
 
             elif msg == '/arquivo':
                 print("\033[F\033[KAbrindo seletor...")
@@ -313,8 +326,9 @@ async def gerenciar_interface():
 # BOOTSTRAP
 # ==========================================
 async def main():
-    global meu_telefone, meu_nome, minha_porta_ws, porta_video_local, radar_p2p
+    global meu_telefone, meu_nome, minha_porta_ws, porta_video_local, radar_p2p, main_loop
     banco.inicializar_banco()
+    main_loop = asyncio.get_running_loop() # Captura o loop assíncrono para uso das threads
     
     print(f"===== INICIALIZAÇÃO P2P =====")
     meu_telefone = input("Seu Telefone (ID): ")

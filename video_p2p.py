@@ -4,11 +4,12 @@ import threading
 import numpy as np
 
 class VideoCall:
-    def __init__(self, meu_ip, minha_porta_video, ip_destino, porta_destino):
+    def __init__(self, meu_ip, minha_porta_video, ip_destino, porta_destino, on_close=None):
         self.meu_ip = meu_ip
         self.minha_porta_video = minha_porta_video
         self.ip_destino = ip_destino
         self.porta_destino = porta_destino
+        self.on_close = on_close  # Gatilho para avisar o encerramento ao app_p2p
         
         self.rodando = False
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -20,11 +21,9 @@ class VideoCall:
         
         while self.rodando:
             try:
-                # Diminuímos o timeout para não prender o laço
                 self.sock.settimeout(0.5)
                 data, addr = self.sock.recvfrom(65536)
                 
-                # Se recebeu algo, zera o contador de queda
                 tempo_sem_sinal = 0 
                 
                 np_data = np.frombuffer(data, dtype=np.uint8)
@@ -35,27 +34,24 @@ class VideoCall:
                     
             except socket.timeout:
                 tempo_sem_sinal += 0.5
-                # Se passar de 5 segundos de silêncio, desliga sozinho
+                # Watchdog de segurança: se a ligação cair fisicamente, fecha em 5s
                 if tempo_sem_sinal >= 5.0:
                     print("\n[Vídeo] A chamada foi encerrada (Conexão perdida).")
                     self.parar()
                     break
             except ConnectionResetError:
-                # Ignora falso-positivo do Windows
                 pass
             except OSError:
-                # Se o socket foi fechado de propósito
                 break
             except Exception:
                 pass
 
-            # ====================================================
-            # A MÁGICA: O waitKey agora fica fora e roda sempre!
-            # Mantém a janela fluida e escuta o "q" a qualquer momento
-            # ====================================================
+            # Captura a tecla 'q' continuamente fora do bloco de receção
             if cv2.waitKey(1) & 0xFF == ord('q'):
                 print("\n[Vídeo] Você encerrou a chamada.")
                 self.parar()
+                if self.on_close:
+                    self.on_close()  # Dispara a notificação de rede
                 break
                 
         cv2.destroyAllWindows()
