@@ -10,9 +10,8 @@ import banco
 from descoberta import PeerDiscovery
 from video_p2p import VideoCall
 
-# ==========================================
+
 # IMPORTAÇÃO SEGURA DO TKINTER
-# ==========================================
 USAR_GUI = True
 try:
     import tkinter as tk
@@ -20,9 +19,6 @@ try:
 except ImportError:
     USAR_GUI = False
 
-# ==========================================
-# ESTADO GLOBAL E MEMÓRIA
-# ==========================================
 radar_p2p = None
 mensagens_nao_lidas = []
 historico_conversas = {}
@@ -47,7 +43,7 @@ def carregar_tela_chat(telefone_alvo):
     peers_online = radar_p2p.get_peers() if radar_p2p else {}
     nome_alvo = peers_online.get(telefone_alvo, {}).get('nome', telefone_alvo)
     print(f"=== CONVERSA COM: {nome_alvo} ===")
-    print("Comandos: /voltar | /arquivo | /video | /atender")
+    print("Comandos: /voltar | /arquivo | /video")
     print("="*50)
     
     if telefone_alvo in historico_conversas:
@@ -56,11 +52,8 @@ def carregar_tela_chat(telefone_alvo):
             print(f"[{msg['hora']}] {prefixo}: {msg['texto']}")
     print(" ")
 
-# ==========================================
 # MOTOR GRÁFICO DE VÍDEO (THREAD PRINCIPAL)
-# ==========================================
 async def motor_interface_video():
-    """Responsável por desenhar as imagens na tela de forma segura no Linux."""
     global sessao_video, contato_ativo
     janela_aberta = False
     
@@ -95,9 +88,7 @@ async def motor_interface_video():
                 
         await asyncio.sleep(0.03) 
 
-# ==========================================
 # SELETOR DE ARQUIVOS
-# ==========================================
 def _abrir_janela_selecao():
     root = tk.Tk()
     root.withdraw() 
@@ -110,13 +101,11 @@ async def selecionar_arquivo_async():
     if USAR_GUI:
         return await asyncio.to_thread(_abrir_janela_selecao)
     else:
-        print("\n\033[F\033[K[!] Interface gráfica não detectada.")
+        print("\n\033[F\033[K[!] Erro!")
         caminho = await aioconsole.ainput("Digite o caminho do arquivo: ")
         return caminho.strip() if caminho.strip() else ""
 
-# ==========================================
 # LADO SERVIDOR (ESCUTANDO)
-# ==========================================
 async def servidor_local(websocket):
     global mensagens_nao_lidas, historico_conversas, chamada_pendente, sessao_video
     try:
@@ -135,20 +124,20 @@ async def servidor_local(websocket):
                     'ip': ip_chamador,
                     'porta_video': porta_video_chamador
                 }
-                print(f"\n\033[F\033[K📞 [RING] {nome_remetente} está te ligando por vídeo! Digite /atender para aceitar.")
+                print(f"\n\033[F\033[K📞 {nome_remetente} está te ligando por vídeo! Digite /atender para aceitar.")
                 await websocket.send(json.dumps({"tipo": "sinal_recebido"}))
 
             elif tipo == 'aceitar_video':
                 ip_destino = radar_p2p.get_peers().get(remetente, {}).get('ip', '0.0.0.0')
                 porta_video_destino = dados.get('porta_video')
 
-                print(f"\n\033[F\033[K🎥 {nome_remetente} atendeu! Abrindo câmera...")
+                print(f"\n\033[F\033[K🎥 {nome_remetente} atendeu! Iniciando chamada...")
                 sessao_video = VideoCall('0.0.0.0', porta_video_local, ip_destino, porta_video_destino)
                 sessao_video.iniciar()
                 await websocket.send(json.dumps({"tipo": "sinal_recebido"}))
 
             elif tipo == 'encerrar_video':
-                print(f"\n\033[F\033[K📞 {nome_remetente} encerrou a chamada de vídeo.")
+                print(f"\n\033[F\033[K📞 {nome_remetente} encerrou a chamada.")
                 if sessao_video:
                     sessao_video.parar()
                     
@@ -198,9 +187,7 @@ async def iniciar_servidor_ws():
     async with websockets.serve(servidor_local, "0.0.0.0", minha_porta_ws, max_size=None):
         await asyncio.Future()
 
-# ==========================================
 # LADO CLIENTE (ENVIANDO)
-# ==========================================
 async def disparar_pacote_ws(destinatario, pacote):
     peers_online = radar_p2p.get_peers() if radar_p2p else {}
     if destinatario in peers_online:
@@ -260,19 +247,17 @@ async def enviar_arquivo_p2p(destinatario, caminho_arquivo):
         return "✔"
     return " "
 
-# ==========================================
 # INTERFACE CLI
-# ==========================================
 async def gerenciar_interface():
     global estado_cli, contato_ativo, chamada_pendente, sessao_video
     
     while True:
         if estado_cli == 'MENU':
             print("\n" + "="*40)
-            print(f" NÓ: {meu_nome} | PORTA WS: {minha_porta_ws}")
+            print(f" NOME: {meu_nome} | PORTA: {minha_porta_ws}")
             print("="*40)
-            print("1. Ver Radares (Usuários Online)")
-            print("2. Abrir Chat com Número")
+            print("1. Usuários Online")
+            print("2. Abrir Chat")
             print("3. Desconectar-se")
             print("="*40)
             
@@ -282,9 +267,9 @@ async def gerenciar_interface():
                 limpar_tela()
                 peers_online = radar_p2p.get_peers() if radar_p2p else {}
                 if not peers_online:
-                    print("\nNenhum usuário detectado na rede.")
+                    print("\nNenhum usuário na rede.")
                 else:
-                    print("\n--- RADAR P2P (LAN) ---")
+                    print("\n--- Usuários online ---")
                     for tel, info in peers_online.items():
                         print(f" 🟢 {info['nome']} ({tel}) -> IP: {info['ip']}")
                 await aioconsole.ainput("\nPressione Enter para voltar...")
@@ -313,7 +298,7 @@ async def gerenciar_interface():
                 limpar_tela() 
                 
             elif msg == '/video':
-                print("\033[F\033[K📞 Chamando por vídeo...")
+                print("\033[F\033[K📞 Chamando...")
                 await enviar_sinal_video(contato_ativo, 'chamada_video')
                 
             elif msg == '/atender':
@@ -322,7 +307,7 @@ async def gerenciar_interface():
                     ip_chamador = chamada_pendente['ip']
                     porta_chamador = chamada_pendente['porta_video']
                     
-                    print("\033[F\033[K🎥 Atendendo chamada! Ligando câmera...")
+                    print("\033[F\033[K🎥 Atendendo chamada! Conectando...")
                     await enviar_sinal_video(remetente, 'aceitar_video')
                     
                     sessao_video = VideoCall('0.0.0.0', porta_video_local, ip_chamador, porta_chamador)
@@ -332,33 +317,33 @@ async def gerenciar_interface():
                     print("\033[F\033[K[!] No momento não há chamadas tocando.")
 
             elif msg == '/arquivo':
-                print("\033[F\033[KAbrindo seletor...")
+                print("\033[F\033[KEscolha o arquivo...")
                 caminho = await selecionar_arquivo_async()
                 if caminho: 
                     print(f"\033[F\033[KEnviando '{os.path.basename(caminho)}'...") 
                     status_icon = await enviar_arquivo_p2p(contato_ativo, caminho)
                     print(f"\033[F\033[KVocê enviou um arquivo: {os.path.basename(caminho)} {status_icon}")
                 else:
-                    print("\033[F\033[K[!] Envio cancelado.")
+                    print("\033[F\033[K[!] Erro no envio.")
                     
             elif msg.strip():
                 status_icon = await enviar_mensagem_p2p(contato_ativo, msg)
                 print(f"\033[F\033[KVocê: {msg} {status_icon}") 
 
-# ==========================================
+
 # BOOTSTRAP
-# ==========================================
+
 async def main():
     global meu_telefone, meu_nome, minha_porta_ws, porta_video_local, radar_p2p
     banco.inicializar_banco()
     
-    print(f"===== INICIALIZAÇÃO P2P =====")
-    meu_telefone = input("Seu Telefone (ID): ")
-    meu_nome = input("Seu Nome/Apelido: ")
+    print(f"===== INICIALIZAÇÃO =====")
+    meu_telefone = input("Seu Telefone: ")
+    meu_nome = input("Seu Nome: ")
     
     while True:
         try:
-            minha_porta_ws = int(input("Porta local para operar (ex: 8001): "))
+            minha_porta_ws = int(input("Porta local (ex: 8000): "))
             break
         except ValueError:
             pass
@@ -366,7 +351,7 @@ async def main():
     porta_video_local = minha_porta_ws + 10000
             
     limpar_tela()
-    print("Iniciando nó P2P na rede local...")
+    print("Iniciando na rede local...")
 
     radar_p2p = PeerDiscovery(meu_telefone, meu_nome, minha_porta_ws)
     radar_p2p.start()
